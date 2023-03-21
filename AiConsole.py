@@ -7,18 +7,32 @@ from prompt_toolkit import prompt, PromptSession
 from functools import lru_cache
 import getpass
 
-def ottieni_info_sistema():
-    nome_sistema = platform.system()
-    versione_sistema = platform.release()
-    architettura = platform.architecture()[0]
-    return f"{nome_sistema} {versione_sistema} {architettura}"
+print("Aiconsole versione 0.1 \n Comunica in maniera naturale col terminale\n\n\n")
+api_key = input("Inserisci la tua API key: ")
 
-def analizza_risposta_gpt(risposta):
-    risposta_pulita = pulisci_risposta_gpt(risposta)
-    comandi = re.split(r';\s*', risposta_pulita)
-    comando_unificato = ' && '.join(comandi)
+def identifica_sistema_operativo():
+    if os.name == 'nt':
+        return "Powershell"
+    else:
+        release = os.uname()[2]
+        distribuzione = os.uname()[3]
+        return f"{distribuzione} {release}"
+
+def estrai_comandi(testo):
+    comandi = re.split(r';\s*', testo)
+    comandi_puliti = [comando.strip() for comando in comandi if comando.strip()]
+    return comandi_puliti
+
+def analizza_risposta_gpt(risposta, sistema_operativo):
+    risposta_pulita = risposta.replace("''", "").strip()
+    comandi = estrai_comandi(risposta_pulita)
+
+    if sistema_operativo == "Windows":
+        comando_unificato = ' & '.join(comandi)
+    else:
+        comando_unificato = ' && '.join(comandi)
+
     return comando_unificato
-
 
 def ottieni_input_utente(messaggio_prompt):
     input_utente = prompt(messaggio_prompt, default='', insert_text=True)
@@ -36,7 +50,8 @@ def esegui_comandi(comandi):
     return risultati
 
 def esegui_terminale():
-    info_sistema = ottieni_info_sistema()
+    sistema_operativo = identifica_sistema_operativo()
+
     sessione = PromptSession()
 
     while True:
@@ -45,68 +60,46 @@ def esegui_terminale():
         if prompt_utente.lower() == 'esci':
             break
 
-        prompt_gpt = f"Converti la seguente richiesta dell'utente in un comando per linux RedHat : ({prompt_utente}) esempio output:arp -a"
+        prompt_gpt = f"Converti la seguente richiesta dell'utente in un comando per {sistema_operativo} : ({prompt_utente}) esempio risposta:ls"
 
         risposta_gpt = ottieni_risposta_gpt(prompt_gpt)
+        print(f"Risposta GPT-3:\n{risposta_gpt} per {sistema_operativo}\n")
+        comando = analizza_risposta_gpt(risposta_gpt, sistema_operativo)
 
-        comando = analizza_risposta_gpt(risposta_gpt)
-        output = esegui_comando(comando)
-        if output != 'None':
-            print(f"Risultato:\n{output}\n")
+        if comando:
+            output = esegui_comando(comando)
+            if output != 'None':
+                print(f"Risultato:\n{output}\n")
+            else:
+                print(f"Il comando non ha generato output")
         else:
-            print(f"Il comando non ha generato output")
-
+            print("Nessun comando estratto dalla risposta GPT-3.")
 
 @lru_cache(maxsize=1280000)
 def ottieni_risposta_gpt(prompt):
-    openai.api_key = "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"
-
+    current_dir = os.getcwd()
+    current_user = getpass.getuser()
+    current_os = platform.system()
+    openai.api_key = "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"
+    openai.api_key = ottieni_input_utente.prompt
     risposta = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=[{"role": "system", "content": "Comando: " + prompt}],
+        messages=[    {"role": "system", "content": "Directory: " + current_dir},    {"role": "system", "content": "User: " + current_user},    {"role": "system", "content": "OS: " + current_os},    {"role": "user", "content": prompt},],
         max_tokens=100,
         n=1,
         temperature=0.82,
+        top_p=0.56,
     )
-
     messaggio = risposta.choices[0].message["content"].strip()
     return messaggio
-
-def ottieni_risposta_gpt_per_output(output):
-    output_minuscolo = output.lower()
-    if "y" in output_minuscolo or "Y" in output_minuscolo:
-        return "y"
-    if "password" in output_minuscolo:
-        password = getpass.getpass(f"L'operazione richiede verifica\nInserisci la password dell'utente: ")
-        return password
-    else:
-        prompt_gpt = f"Comando per gestire l'output '{output}' nel terminale? ''\n\n> "
-        risposta_gpt = ottieni_risposta_gpt(prompt_gpt)
-
-    if risposta_gpt.lower() == "nessuna azione":
-        return None
-    else:
-        return risposta_gpt
-
-def pulisci_risposta_gpt(risposta):
-    risposta_pulita = risposta.replace("''", "").strip()
-    return risposta_pulita
-
-def pulisci_risposta_gpt(risposta):
-    risposta_pulita = risposta.replace("''", "").strip()
-    return risposta_pulita
 
 def esegui_comando(comando):
     try:
         if platform.system() == "Windows":
-            comando = "powershell.exe -Command " + comando
-        else:
-            comando = "/bin/bash -c " + comando
-
+            comando = 'start powershell -NoExit -Command "' + comando + '"'
         processo = subprocess.Popen(
             comando, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True
         )
-
         print(f"\nEseguendo il comando: {comando}")
 
         while True:
@@ -115,12 +108,11 @@ def esegui_comando(comando):
                 break
             if output:
                 print(f"{output.strip()}")
-                risposta = ottieni_risposta_gpt_per_output(output.strip())
 
-                if risposta:
-                    processo.stdin.write(risposta + "\n")
+                if "Do you want to continue?" in output.strip() or "Vuoi continuare?" in output.strip():
+                    processo.stdin.write("Y\n")
                     processo.stdin.flush()
-                    print(f"Invio input al comando: {risposta}")
+                    print("Premendo Y per continuare l'installazione...")
 
         stderr = processo.stderr.read()
         if stderr:
@@ -132,7 +124,7 @@ def esegui_comando(comando):
         return f"Errore imprevisto: {e}"
 
 def main():
-    info_sistema = ottieni_info_sistema()
+    info_sistema = identifica_sistema_operativo()
     esegui_terminale()
 
 if __name__ == "__main__":
